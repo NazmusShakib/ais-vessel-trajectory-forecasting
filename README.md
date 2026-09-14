@@ -36,12 +36,10 @@ full_5_60_20260913T163619Z/
 └── shard_index.csv  ← List of data files used by training
 
 To upload data to server using scp
-scp "/path/on/mac/your_dataset.zip" \
-  YOUR_USERNAME@xfer-vm-01.jasmin.ac.uk:/your/jasmin/workspace/
+`scp "/path/on/mac/your_dataset.zip" YOUR_USERNAME@xfer-vm-01.jasmin.ac.uk:/your/jasmin/workspace/`
 
 To upload data to server using rsync
-$ rsync -avP "/path/to/your_dataset.zip" \
-  YOUR_USERNAME@xfer-vm-01.jasmin.ac.uk:/your/jasmin/workspace/
+`rsync -avP "/path/to/your_dataset.zip" YOUR_USERNAME@xfer-vm-01.jasmin.ac.uk:/your/jasmin/workspace/`
 
 The pointer at `../outputs/vessel_group_forecasting/current_release.json` identifies:
 
