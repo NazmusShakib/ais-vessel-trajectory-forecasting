@@ -1,0 +1,31 @@
+# Python environments
+.venv/
+.venv*/
+venv/
+
+# Python and notebook caches
+__pycache__/
+*.py[cod]
+.cache/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+jasmin/config.sh
+
+# Training outputs and worker logs
+runs/
+jobs/
+ais_results/
+ais_worker_logs/
+
+# Slurm logs
+slurm-*.out
+slurm-*.err
+
+# macOS metadata
+.DS_Store
+__MACOSX/

@@ -1,0 +1,12 @@
+# Copy to jasmin/config.sh on JASMIN, then edit these paths.
+# This is a shell configuration for the queue wrappers, separate from .env.
+# Use the Python executable in a Linux environment with the dependencies installed.
+export AIS_PYTHON='/REPLACE_WITH_YOUR_LINUX_ENV/bin/python'
+# Must contain groups/, manifest.json and shard_index.csv after extraction.
+export AIS_DATASET_DIR='/REPLACE_WITH_EXTRACTED_DATASET/full_5_60_20260913T163619Z'
+# Choose persistent writable storage with sufficient quota.
+export AIS_RUNS_DIR='/REPLACE_WITH_RESULTS_STORAGE/ais_results'
+export AIS_JOBS_DIR='/REPLACE_WITH_RESULTS_STORAGE/ais_worker_logs'
+export AIS_BATCH_SIZE=64
+# If your chosen Python environment needs a module or activation, add it here.
+# Keep the module version/environment fixed for every comparison experiment.

@@ -1,0 +1,12 @@
+# Tested environment. TensorFlow platform support depends on OS and Python.
+tensorflow==2.16.2
+keras==3.13.2
+numpy==1.26.4
+pandas==2.3.3
+pyarrow==21.0.0
+pyproj==3.6.1
+matplotlib==3.10.8
+nbformat==5.10.4
+nbclient==0.10.4
+nbconvert==7.17.0
+ipykernel==6.31.0

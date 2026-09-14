@@ -1,0 +1,12 @@
+Shell syntax checks: all four files passed.
+GPU array index 0 -> Cargo: passed (stubbed Python; no training)
+GPU array index 1 -> Tanker: passed (stubbed Python; no training)
+GPU array index 2 -> Passenger: passed (stubbed Python; no training)
+GPU array index 3 -> Port_Service: passed (stubbed Python; no training)
+GPU array index 4 -> Research_Offshore: passed (stubbed Python; no training)
+GPU array index 5 -> Fishing: passed (stubbed Python; no training)
+GPU array index 6 -> Unknown: passed (stubbed Python; no training)
+CPU baseline routing: passed (stubbed Python)
+GPU baseline rejection: passed
+Refuses direct execution outside Slurm: passed
+Actual JASMIN submission and GPU execution: not performed.

@@ -1,0 +1,4 @@
+# Proposed Linux NVIDIA environment, not yet verified on ORCHID.
+# Use Python 3.11. Includes the project pins and matching pip CUDA dependencies.
+-r ../requirements.txt
+tensorflow[and-cuda]==2.16.2
