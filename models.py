@@ -21,10 +21,28 @@ class GaussianHead(L.Layer):
  def call(self,x):return tf.concat([x[...,:2],tf.nn.softplus(x[...,2:])+self.floor],axis=-1)
  def get_config(self):return dict(super().get_config(),floor=self.floor)
 
+def make_gaussian_nll(beta=0.):
+ """beta-NLL (Seitzer et al., ICLR 2022, arXiv:2203.09168).
+
+ Plain Gaussian NLL scales each sample's gradient by 1/sigma^2, so regions the model
+ currently fits badly lose weight as training proceeds and the fit converges prematurely.
+ Our targets make this acute where they are zero-inflated: 36.9% of Port_Service's 60-minute
+ displacements are under one metre while the tail reaches 14.9 km, so sigma collapses onto the
+ stationary mass and a single tail example then costs thousands. Weighting each sample by its
+ own detached sigma^(2*beta) cancels that scaling. beta=0 reproduces the original loss exactly.
+ See BETA_NLL_BY_GROUP in workflow.py for which groups this is applied to and why.
+ """
+ def loss(y,p):
+  mu=p[...,:2];sigma=p[...,2:]
+  nll=tf.math.log(sigma)+.5*((y-mu)/sigma)**2+.5*math.log(2*math.pi)
+  if beta:nll=tf.stop_gradient(sigma**(2*beta))*nll  # detached: the weight is not itself differentiated
+  return tf.reduce_mean(tf.reduce_sum(nll,axis=-1))
+ return loss
+
 @keras.utils.register_keras_serializable(package='ais_5_60')
 def gaussian_nll(y,p):
- mu=p[...,:2];sigma=p[...,2:]
- return tf.reduce_mean(tf.reduce_sum(tf.math.log(sigma)+.5*((y-mu)/sigma)**2+.5*math.log(2*math.pi),axis=-1))
+ """Retained under its original name for models saved by earlier runs."""
+ return make_gaussian_nll(0.)(y,p)
 
 def build_model(architecture,cfg):
  configure_runtime(cfg)
@@ -52,7 +70,8 @@ def build_model(architecture,cfg):
  out=L.Reshape((12,4 if cfg['probabilistic'] else 2))(raw)
  if cfg['probabilistic']:out=GaussianHead(cfg['sigma_floor_m']/cfg['target_scale_m'])(out)
  model=keras.Model(inp,out,name=architecture)
- model.compile(optimizer=keras.optimizers.Adam(cfg['learning_rate'],clipnorm=1.),loss=gaussian_nll if cfg['probabilistic'] else keras.losses.Huber(delta=1.))
+ loss=make_gaussian_nll(cfg.get('beta_nll',0.)) if cfg['probabilistic'] else keras.losses.Huber(delta=1.)
+ model.compile(optimizer=keras.optimizers.Adam(cfg['learning_rate'],clipnorm=1.),loss=loss)
  return model
 
 def dataset(release,plan,scaler,cfg,training):
@@ -73,7 +92,7 @@ def train_model(architecture,release,plans,scaler,out,cfg):
  keras.backend.clear_session();keras.utils.set_random_seed(cfg['seed'])
  model=build_model(architecture,cfg)
  lines=[];model.summary(print_fn=lambda s,**kw:lines.append(s));(out/'architecture.txt').write_text('\n'.join(lines))
- write_json(out/'model_contract.json',dict(architecture=architecture,parameters=model.count_params(),input_features=18 if cfg['use_spatial_context'] else 16,output_shape=list(model.output_shape),target_scale_m=cfg['target_scale_m'],probabilistic=cfg['probabilistic'],sigma_floor_m=cfg['sigma_floor_m']))
+ write_json(out/'model_contract.json',dict(architecture=architecture,parameters=model.count_params(),input_features=18 if cfg['use_spatial_context'] else 16,output_shape=list(model.output_shape),target_scale_m=cfg['target_scale_m'],probabilistic=cfg['probabilistic'],sigma_floor_m=cfg['sigma_floor_m'],beta_nll=cfg.get('beta_nll',0.)))
  callbacks=[keras.callbacks.EarlyStopping(monitor='val_loss',patience=cfg['patience'],restore_best_weights=True),keras.callbacks.ReduceLROnPlateau(monitor='val_loss',factor=.5,patience=4,min_lr=1e-6),keras.callbacks.ModelCheckpoint(str(out/'best_model.keras'),monitor='val_loss',save_best_only=True),keras.callbacks.CSVLogger(str(out/'training_history.csv')),keras.callbacks.TerminateOnNaN()]
  history=model.fit(dataset(release,plans['train'],scaler,cfg,True),validation_data=dataset(release,plans['validation'],scaler,cfg,False),epochs=cfg['epochs'],callbacks=callbacks,verbose=2)
  if not all(np.isfinite(v).all() for v in history.history.values()):raise ValueError('Non-finite training history')

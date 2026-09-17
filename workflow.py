@@ -15,6 +15,12 @@ ROLES=('train','validation','calibration','test')
 GROUPS=('Cargo','Tanker','Passenger','Port_Service','Research_Offshore','Fishing','Unknown')
 KEYS=('X','X_mask','y','origin_xy_m','origin_time_ns','input_observation_time_ns','MMSI','segment_id')
 BASELINES=('constant_position','cv_last_step','cv_mean_last_3','cv_mean_last_5','cv_median_last_5','cv_linear_fit_20','sog_cog_last')
+# beta-NLL is applied only where the targets are zero-inflated. There, sigma collapses onto the mass of
+# stationary windows and the tail then dominates the gradient, so the plain likelihood selects badly.
+# Measured share of 60-minute training targets under one metre: Port_Service 36.9%, Research_Offshore
+# 14.4%, and every remaining group at or below 6.7%. Pilot evidence matches: on Port_Service beta=0.5
+# cut validation-loss jitter from 0.993 to 0.226, while on Cargo it raised jitter from 0.424 to 1.061.
+BETA_NLL_BY_GROUP={'Port_Service':0.5,'Research_Offshore':0.5}
 
 def sha(path):
  h=hashlib.sha256()
@@ -52,7 +58,8 @@ def config(mode='smoke',groups=None,*,device=None,release=None,runs_dir=None,job
   width=16 if mode=='smoke' else 128,dropout=0.2,patience=12,
   max_shards={'smoke':2,'pilot':32,'full':None}[mode],
   rows_per_shard={'smoke':64,'pilot':256,'full':None}[mode],
-  coverage=0.90,target_scale_m=1000.,sigma_floor_m=1.,use_spatial_context=True,
+  coverage=0.90,target_scale_m=1000.,sigma_floor_m=1.,beta_nll=0.,beta_nll_by_group=dict(BETA_NLL_BY_GROUP),
+  use_spatial_context=True,
   probabilistic=True,verify_checksums=True)
 
 def release_info(cfg):
@@ -210,6 +217,12 @@ def evaluate(release,plan,predict,out,cfg,role,q=None):
   np.savez_compressed(out/'test_examples.npz',**{k:np.stack([e[k] for e in examples]) for k in examples[0]})
  write_json(out/f'{role}_metrics.json',result);return result
 
+def group_beta(cfg,group):
+ """beta-NLL weight for one group: its per-group entry when set, otherwise the run-wide default."""
+ beta=cfg.get('beta_nll_by_group',{}).get(group,cfg.get('beta_nll',0.))
+ if beta<0:raise ValueError('beta_nll must not be negative')
+ return float(beta)
+
 def run_experiment(architecture,cfg):
  if architecture not in ('baselines','bilstm_attention','bilstm_only','transformer'):raise ValueError(architecture)
  cfg=copy.deepcopy(cfg);release,index,manifest=release_info(cfg)
@@ -252,9 +265,11 @@ def run_experiment(architecture,cfg):
      rows.append(dict(group=group,model=name,selected_baseline=name==best,**result))
    else:
     from models import train_model,make_predictor
+    # beta is resolved per group; everything else in the configuration is shared across the run.
+    group_cfg=dict(cfg,beta_nll=group_beta(cfg,group))
     scaler=fit_scaler(release,plans['train']);write_json(out/'scaler.json',scaler)
-    model=train_model(architecture,release,plans,scaler,out,cfg)
-    predict=make_predictor(model,scaler,cfg)
+    model=train_model(architecture,release,plans,scaler,out,group_cfg)
+    predict=make_predictor(model,scaler,group_cfg)
     evaluate(release,plans['validation'],predict,out,cfg,'validation')
     q=calibrate(release,plans['calibration'],predict,out,cfg)
     result=evaluate(release,plans['test'],predict,out,cfg,'test',q)

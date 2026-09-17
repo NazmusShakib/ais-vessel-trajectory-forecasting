@@ -17,6 +17,7 @@ def parser():
     p.add_argument('--batch-size', type=int)
     p.add_argument('--epochs', type=int)
     p.add_argument('--deterministic', action='store_true')
+    p.add_argument('--beta-nll', type=float, help='beta-NLL weighting for every group, overriding the zero-inflated per-group defaults (0 reproduces plain Gaussian NLL)')
     p.add_argument('--check-config', action='store_true', help='Validate release metadata, display cohort counts and check hardware; do not train')
     return p
 
@@ -36,6 +37,12 @@ def main():
         p.error(str(exc))
     if a.deterministic:
         cfg['probabilistic'] = False
+    if a.beta_nll is not None:
+        if a.beta_nll < 0:
+            p.error('beta-nll must not be negative')
+        # An explicit value applies to every group, replacing the per-group defaults.
+        cfg['beta_nll'] = a.beta_nll
+        cfg['beta_nll_by_group'] = {}
     if a.check_config:
         _, index, _ = release_info(cfg)
         if a.model != 'baselines':
