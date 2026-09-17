@@ -21,6 +21,20 @@ The dataset is separate. Extract your uploaded ZIP and locate the directory whos
 JASMIN documents job submission from scientific analysis servers. From your current JASMIN login session:
 
 ```bash
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_rsa
+ssh -A username@login.jasmin.ac.uk
+```
+
+Once logged into JASMIN, run:
+```bash
+ssh shakib@sci-vm-01.jasmin.ac.uk
+cd /home/users/shakib/projects/training_5_60_v1
+module load jaspy/3.11/v20240815
+python --version
+```
+
+```bash
 ssh sci-vm-01
 cd /home/users/shakib/projects/training_5_60_v1
 useraccounts
@@ -55,6 +69,7 @@ Run from the code folder on the sci server, after access, environment and paths 
 sbatch --array=0 --time=00:30:00 jasmin/train_gpu.sbatch bilstm_attention smoke
 squeue -u shakib
 ```
+sbatch jasmin/train_gpu.sbatch bilstm_attention full
 
 Check the resulting `slurm-ais-gpu-JOBID_0.out` and `.err` files. A successful job prints a selected GPU, completes a Cargo epoch, and saves a completed run directory. The memory request (32 GB) and CPU request (4) are initial settings, not measured ORCHID resource requirements. The time request limits runtime; it does not estimate queue wait time.
 
