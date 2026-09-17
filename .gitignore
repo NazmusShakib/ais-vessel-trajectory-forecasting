@@ -22,6 +22,10 @@ jobs/
 ais_results/
 ais_worker_logs/
 
+# Environmental data downloads (NetCDF, hundreds of MB)
+env_cache/
+*.nc
+
 # Slurm logs
 slurm-*.out
 slurm-*.err
