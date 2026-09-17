@@ -44,6 +44,11 @@ def gaussian_nll(y,p):
  """Retained under its original name for models saved by earlier runs."""
  return make_gaussian_nll(0.)(y,p)
 
+def make_ade_metric(scale):
+ """Mean displacement error in metres, logged next to the loss so a diverging run is visible."""
+ def ade_m(y,p):return tf.reduce_mean(tf.norm((p[...,:2]-y)*scale,axis=-1))
+ return ade_m
+
 def build_model(architecture,cfg):
  configure_runtime(cfg)
  width=cfg['width'];features=18 if cfg['use_spatial_context'] else 16
@@ -71,7 +76,8 @@ def build_model(architecture,cfg):
  if cfg['probabilistic']:out=GaussianHead(cfg['sigma_floor_m']/cfg['target_scale_m'])(out)
  model=keras.Model(inp,out,name=architecture)
  loss=make_gaussian_nll(cfg.get('beta_nll',0.)) if cfg['probabilistic'] else keras.losses.Huber(delta=1.)
- model.compile(optimizer=keras.optimizers.Adam(cfg['learning_rate'],clipnorm=1.),loss=loss)
+ model.compile(optimizer=keras.optimizers.Adam(cfg['learning_rate'],clipnorm=1.),loss=loss,
+               metrics=[make_ade_metric(cfg['target_scale_m'])])
  return model
 
 def dataset(release,plan,scaler,cfg,training):
@@ -92,8 +98,11 @@ def train_model(architecture,release,plans,scaler,out,cfg):
  keras.backend.clear_session();keras.utils.set_random_seed(cfg['seed'])
  model=build_model(architecture,cfg)
  lines=[];model.summary(print_fn=lambda s,**kw:lines.append(s));(out/'architecture.txt').write_text('\n'.join(lines))
- write_json(out/'model_contract.json',dict(architecture=architecture,parameters=model.count_params(),input_features=18 if cfg['use_spatial_context'] else 16,output_shape=list(model.output_shape),target_scale_m=cfg['target_scale_m'],probabilistic=cfg['probabilistic'],sigma_floor_m=cfg['sigma_floor_m'],beta_nll=cfg.get('beta_nll',0.)))
- callbacks=[keras.callbacks.EarlyStopping(monitor='val_loss',patience=cfg['patience'],restore_best_weights=True),keras.callbacks.ReduceLROnPlateau(monitor='val_loss',factor=.5,patience=4,min_lr=1e-6),keras.callbacks.ModelCheckpoint(str(out/'best_model.keras'),monitor='val_loss',save_best_only=True),keras.callbacks.CSVLogger(str(out/'training_history.csv')),keras.callbacks.TerminateOnNaN()]
+ write_json(out/'model_contract.json',dict(architecture=architecture,parameters=model.count_params(),input_features=18 if cfg['use_spatial_context'] else 16,output_shape=list(model.output_shape),target_scale_m=cfg['target_scale_m'],probabilistic=cfg['probabilistic'],sigma_floor_m=cfg['sigma_floor_m'],beta_nll=cfg.get('beta_nll',0.),monitor=cfg.get('monitor','val_ade_m')))
+ # Select on metre error, not likelihood: a single heavy-tailed validation example can swing the NLL
+ # several-fold, so val_loss selected checkpoints up to 55 m worse than the run's best. Both are logged.
+ monitor=cfg.get('monitor','val_ade_m')
+ callbacks=[keras.callbacks.EarlyStopping(monitor=monitor,mode='min',patience=cfg['patience'],restore_best_weights=True),keras.callbacks.ReduceLROnPlateau(monitor=monitor,mode='min',factor=.5,patience=4,min_lr=1e-6),keras.callbacks.ModelCheckpoint(str(out/'best_model.keras'),monitor=monitor,mode='min',save_best_only=True),keras.callbacks.CSVLogger(str(out/'training_history.csv')),keras.callbacks.TerminateOnNaN()]
  history=model.fit(dataset(release,plans['train'],scaler,cfg,True),validation_data=dataset(release,plans['validation'],scaler,cfg,False),epochs=cfg['epochs'],callbacks=callbacks,verbose=2)
  if not all(np.isfinite(v).all() for v in history.history.values()):raise ValueError('Non-finite training history')
  write_json(out/'history.json',history.history)

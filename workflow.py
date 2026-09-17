@@ -59,7 +59,7 @@ def config(mode='smoke',groups=None,*,device=None,release=None,runs_dir=None,job
   max_shards={'smoke':2,'pilot':32,'full':None}[mode],
   rows_per_shard={'smoke':64,'pilot':256,'full':None}[mode],
   coverage=0.90,target_scale_m=1000.,sigma_floor_m=1.,beta_nll=0.,beta_nll_by_group=dict(BETA_NLL_BY_GROUP),
-  use_spatial_context=True,
+  monitor='val_ade_m',use_spatial_context=True,
   probabilistic=True,verify_checksums=True)
 
 def release_info(cfg):
