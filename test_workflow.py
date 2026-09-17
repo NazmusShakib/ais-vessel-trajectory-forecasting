@@ -45,5 +45,21 @@ class ContractTests(unittest.TestCase):
    np.testing.assert_allclose(q,19)
  def test_two_dimensional_region(self):
   y=np.array([[[3.,4.]]]);np.testing.assert_allclose(score_distances(y,np.zeros_like(y),np.ones_like(y)),5)
+ def test_motion_regime_uses_valid_sog_only(self):
+  from workflow import motion_regime,KNOTS_PER_MS
+  b={'X':np.zeros((4,20,8)),'X_mask':np.ones((4,20,8),bool)}
+  b['X'][0,:,2]=2.0                      # clearly under way
+  b['X'][1,:,2]=0.05                     # clearly not
+  b['X'][2,:,2]=0.51/KNOTS_PER_MS        # just above the threshold. Exactly ON it is left
+                                         # unspecified: averaging 20 identical floats need not
+                                         # return that float, so the boundary case is arbitrary.
+  b['X'][3,:,2]=9.9;b['X_mask'][3,:,2]=False   # no valid SOG at all
+  r=motion_regime(b,0.5)
+  self.assertEqual(list(r),['under_way','not_under_way','under_way','sog_unknown'])
+ def test_motion_regime_ignores_masked_steps(self):
+  from workflow import motion_regime
+  b={'X':np.zeros((1,20,8)),'X_mask':np.ones((1,20,8),bool)}
+  b['X'][0,:,2]=0.05;b['X'][0,:5,2]=50.;b['X_mask'][0,:5,2]=False  # masked outliers must not count
+  self.assertEqual(motion_regime(b,0.5)[0],'not_under_way')
 
 if __name__=='__main__':unittest.main(verbosity=2)

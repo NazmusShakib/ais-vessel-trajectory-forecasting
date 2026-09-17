@@ -181,8 +181,26 @@ def calibrate(release,plan,predict,out,cfg):
  result=dict(n=n,nominal_coverage=cfg['coverage'],rank=rank,q=q,scope='per_horizon_2d_region',guarantee='Empirical only: overlapping windows and temporal shift violate ordinary IID assumptions',plan_hash=plan_hash(plan))
  write_json(out/'calibration.json',result);return np.asarray(q)
 
+KNOTS_PER_MS=1.9438444924406
+
+def motion_regime(batch,under_way_knots):
+ """Label each window by whether the vessel was under way over its input history.
+
+ Measured on the release: 68.3% of Port_Service test windows are not under way and carry only
+ 19.7% of the error, while the 31.7% under way carry 80.3%. A single aggregate metric averages a
+ trivially predictable population with a genuinely hard one, so errors are reported by regime as
+ well as by group and horizon. Uses the raw SOG feature (index 2, metres per second) over valid
+ input steps only; windows with no valid SOG are labelled separately rather than assumed stationary.
+ """
+ sog=np.where(batch['X_mask'][...,2],batch['X'][...,2],np.nan)
+ with np.errstate(invalid='ignore'):
+  mean_sog=np.nanmean(np.where(np.isnan(sog),np.nan,sog),axis=1)
+ out=np.where(mean_sog>=under_way_knots/KNOTS_PER_MS,'under_way','not_under_way')
+ return np.where(np.isfinite(mean_sog),out,'sog_unknown')
+
 def evaluate(release,plan,predict,out,cfg,role,q=None):
- total=0;error_sum=np.zeros(12);covered_sum=np.zeros(12);area_sum=np.zeros(12);by_vessel={};by_month={};examples=[]
+ total=0;error_sum=np.zeros(12);covered_sum=np.zeros(12);area_sum=np.zeros(12)
+ by_vessel={};by_month={};by_regime={};examples=[]
  for b in iter_batches(release,plan,cfg['batch_size']):
   mu,sigma=predict(b);err=np.linalg.norm(mu-b['y'],axis=-1)
   if not np.isfinite(err).all() or not np.isfinite(sigma).all() or not (sigma>0).all():raise ValueError('Invalid prediction')
@@ -190,7 +208,8 @@ def evaluate(release,plan,predict,out,cfg,role,q=None):
   area=np.pi*sigma[...,0]*sigma[...,1]*q**2 if q is not None else np.zeros_like(err)
   error_sum+=err.sum(0);covered_sum+=covered.sum(0);area_sum+=area.sum(0);total+=len(err)
   months=pd.to_datetime(b['origin_time_ns'],utc=True).strftime('%Y-%m').to_numpy()
-  for values,agg in [(b['MMSI'],by_vessel),(months,by_month)]:
+  regimes=motion_regime(b,cfg.get('under_way_knots',0.5))
+  for values,agg in [(b['MMSI'],by_vessel),(months,by_month),(regimes,by_regime)]:
    for value in np.unique(values):
     ix=values==value;key=str(value)
     a=agg.setdefault(key,[0,np.zeros(12),np.zeros(12),np.zeros(12)])
@@ -205,7 +224,12 @@ def evaluate(release,plan,predict,out,cfg,role,q=None):
   horizons['empirical_coverage']=covered_sum/total;horizons['mean_region_area_m2']=area_sum/total
   result['mean_horizon_coverage']=float(covered_sum.mean()/total)
  horizons.to_csv(out/f'{role}_horizons.csv',index=False)
- for label,agg in [('vessel',by_vessel),('month',by_month)]:
+ # Surface the regime split in the headline result: an aggregate ADE over a bimodal population
+ # describes neither mode. Shares are of windows; ADE is averaged over all twelve horizons.
+ for key,(n,es,_,_) in by_regime.items():
+  result[f'{key}_share']=float(n/total)
+  result[f'{key}_ade_m']=float(es.mean()/n)
+ for label,agg in [('vessel',by_vessel),('month',by_month),('regime',by_regime)]:
   rows=[]
   for key,(n,es,cs,ars) in agg.items():
    for j,h in enumerate(HORIZONS):
