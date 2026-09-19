@@ -283,7 +283,7 @@ def build_shard(npz_path, fields, transformer):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--release', default='../outputs/vessel_group_forecasting/data/full_5_60_20260913T163619Z')
+    p.add_argument('--release', default='../outputs/vessel_group_forecasting/data/full_5_60_20260918T072424Z')
     p.add_argument('--cache', default='../env_cache', help='Directory holding the downloaded NetCDF')
     p.add_argument('--out', default='../env_sidecar', help='Where the Parquet sidecars are written')
     p.add_argument('--sources', nargs='+', default=['cur', 'ssh', 'wav'], choices=list(SOURCES))
