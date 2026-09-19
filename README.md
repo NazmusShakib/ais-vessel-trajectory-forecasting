@@ -29,8 +29,8 @@ Open from this folder or the project root. Execute top to bottom. Training runs 
 Every run gets a new timestamped directory under `runs/`; existing experiments are not overwritten. Failed runs are marked failed and retain their intermediate files. Automatic resumption of neural training is not implemented. Completed datasets are consumed directly: **do not rerun MySQL extraction**.
 
 ## Prepared data used
-- must required files - /outputs/vessel_group_forecasting/data/full_5_60_20260913T163619Z
-full_5_60_20260913T163619Z/
+- must required files - /outputs/vessel_group_forecasting/data/full_5_60_20260918T072424Z
+full_5_60_20260918T072424Z/
 ├── groups/          ← All vessel groups, splits and NPZ files
 ├── manifest.json    ← Dataset information
 └── shard_index.csv  ← List of data files used by training
@@ -44,7 +44,7 @@ To upload data to server using rsync
 The pointer at `../outputs/vessel_group_forecasting/current_release.json` identifies:
 
 - Observation source: `../data_collection/ais_validated_training_outputs/full_20260913T005019_998082Z/`
-- Training release: `../outputs/vessel_group_forecasting/data/full_5_60_20260913T163619Z/`
+- Training release: `../outputs/vessel_group_forecasting/data/full_5_60_20260918T072424Z/`
 
 The training release contains 20,599,126 windows in 5,101 NPZ shards. This folder references those files read-only rather than copying six gigabytes of arrays. Move/share the release too if running elsewhere, and set `AIS_DATASET_DIR` in `.env` to its new path. The direct dataset path bypasses the old release pointer; no MySQL connection or clean-track Parquet files are needed for training. A different release requires reviewing the explicit identity check in `release_info`.
 
@@ -108,7 +108,7 @@ Add `--deterministic` for a deterministic neural experiment or `--epochs 30` to 
 The supplied `.env` works with the current local folder layout. `.env.example` is a commented template for another computer. The script reads `.env` automatically from beside `run_training.py`; do not source it as shell code. No additional dotenv package is required.
 
 ```dotenv
-AIS_DATASET_DIR=/your/storage/full_5_60_20260913T163619Z
+AIS_DATASET_DIR=/your/storage/full_5_60_20260918T072424Z
 AIS_DEVICE=auto
 AIS_RUNS_DIR=/your/storage/ais_experiments
 AIS_JOBS_DIR=/your/storage/ais_worker_logs

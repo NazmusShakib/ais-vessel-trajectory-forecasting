@@ -96,7 +96,7 @@ def release_info(cfg):
  release=Path(cfg['release']).resolve();
  manifest=json.loads((release/'manifest.json').read_text())
  if manifest['status']!='complete':raise ValueError('Release is not complete')
- if manifest['summary']['windows']!=20599126:raise ValueError('This workflow was built for release full_5_60_20260913T163619Z; review a changed release explicitly')
+ if manifest['summary']['windows']!=20102304:raise ValueError('This workflow was built for release full_5_60_20260918T072424Z; review a changed release explicitly')
  index=pd.read_csv(release/'shard_index.csv')
  if int(index.windows.sum())!=manifest['summary']['windows']:raise ValueError('Index totals do not reconcile')
  if not set(cfg['groups']).issubset(GROUPS):raise ValueError('Unknown group')
