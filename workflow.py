@@ -14,6 +14,31 @@ HORIZONS=np.arange(5,61,5)
 ROLES=('train','validation','calibration','test')
 GROUPS=('Cargo','Tanker','Passenger','Port_Service','Research_Offshore','Fishing','Unknown')
 KEYS=('X','X_mask','y','origin_xy_m','origin_time_ns','input_observation_time_ns','MMSI','segment_id')
+# Environmental blocks, each separable so a source can be ablated on its own. Column names are
+# whatever build_env_sidecar.py writes; the validity flag is per source because uo/vo are undefined
+# in 39 cells where zos is not, so one shared flag would silently mark good sea level as missing.
+# Each block contributes its features PLUS its flag: a zero-filled invalid value is otherwise
+# indistinguishable from a genuine zero current.
+ENV_BLOCKS={
+ 'CUR':(('cur_east','cur_north','cur_rel_sin','cur_rel_cos'),'current_valid'),
+ 'SSH':(('ssh','ssh_rate'),'ssh_valid'),
+ 'WAV':(('wave_hs','wave_tm02','wave_rel_sin','wave_rel_cos','wave_hs_swell','stokes_mag'),'wave_valid'),
+ 'WND':(('wind_speed','wind_rel_sin','wind_rel_cos','wind_cross','mslp'),'wind_valid')}
+
+def env_width(blocks):
+ """Extra input features contributed by the enabled blocks. Must agree with model_input."""
+ return sum(len(ENV_BLOCKS[b][0])+1 for b in blocks)
+
+def env_spec(cfg):
+ """(sidecar directory, blocks) for the iter_batches env argument, or None when disabled."""
+ blocks=tuple(cfg.get('env_blocks') or ())
+ if not blocks:return None
+ unknown=[b for b in blocks if b not in ENV_BLOCKS]
+ if unknown:raise ValueError(f'Unknown env blocks {unknown}')
+ sidecar=cfg.get('env_sidecar')
+ if not sidecar:raise ValueError('env_blocks requested but no env_sidecar configured')
+ return (Path(sidecar),blocks)
+
 BASELINES=('constant_position','cv_last_step','cv_mean_last_3','cv_mean_last_5','cv_median_last_5','cv_linear_fit_20','sog_cog_last')
 # beta-NLL is applied only where the targets are zero-inflated. There, sigma collapses onto the mass of
 # stationary windows and the tail then dominates the gradient, so the plain likelihood selects badly.
@@ -60,6 +85,11 @@ def config(mode='smoke',groups=None,*,device=None,release=None,runs_dir=None,job
   rows_per_shard={'smoke':64,'pilot':256,'full':None}[mode],
   coverage=0.90,target_scale_m=1000.,sigma_floor_m=1.,beta_nll=0.,beta_nll_by_group=dict(BETA_NLL_BY_GROUP),
   monitor='val_ade_m',use_spatial_context=True,
+  # Environmental features are OFF unless blocks are named. Enabling them changes the input width,
+  # so a run with blocks is not comparable to one without unless both are retrained -- which is the
+  # point of the ablation, and the reason this never defaults on.
+  env_sidecar=str(resolve_path(settings.get('AIS_ENV_SIDECAR') or '../env_sidecar')),
+  env_blocks=tuple(b.strip().upper() for b in (settings.get('AIS_ENV_BLOCKS') or '').split(',') if b.strip()),
   probabilistic=True,verify_checksums=True)
 
 def release_info(cfg):
@@ -88,7 +118,38 @@ def select_plan(index,group,role,cfg):
 
 def plan_hash(plan):return hashlib.sha256(json.dumps(plan,sort_keys=True).encode()).hexdigest()
 
-def iter_batches(release,plan,batch_size=64,shuffle=False,seed=42,keys=KEYS):
+def read_sidecar(sidecar,item,selected,arrays,blocks):
+ """Row-aligned environmental features for one shard, verified against the shard's own keys.
+
+ The sidecar mirrors the shard's relative path and row order, and is NOT joined on a key -- so the
+ keys are carried anyway and asserted here. Alignment that is merely assumed is alignment that
+ silently rots, and a misaligned sidecar would attach one vessel's sea state to another's track
+ while training perfectly happily.
+ """
+ path=(Path(sidecar)/item['file']).with_suffix('.parquet')
+ if not path.exists():raise FileNotFoundError(f'No sidecar for {item["file"]}; run build_env_sidecar.py')
+ frame=pd.read_parquet(path)
+ if len(frame)!=item['source_windows']:
+  raise ValueError(f'{path.name}: {len(frame)} sidecar rows against {item["source_windows"]} shard rows')
+ frame=frame.iloc[selected]
+ if not np.array_equal(frame['origin_time_ns'].to_numpy(),arrays['origin_time_ns']):
+  raise ValueError(f'{path.name}: origin_time_ns does not match the shard')
+ if not np.array_equal(frame['segment_id'].to_numpy().astype(str),arrays['segment_id'].astype(str)):
+  raise ValueError(f'{path.name}: segment_id does not match the shard')
+ feats=[];masks=[];flags=[]
+ for b in blocks:
+  cols,valid=ENV_BLOCKS[b]
+  missing=[c for c in (*cols,valid) if c not in frame.columns]
+  if missing:raise ValueError(f'{path.name}: block {b} missing columns {missing}')
+  ok=frame[valid].to_numpy().astype(bool)
+  for c in cols:
+   feats.append(frame[c].to_numpy().astype('float32'));masks.append(ok)
+  flags.append(ok.astype('float32'))
+ env=np.stack(feats,-1);mask=np.stack(masks,-1);flag=np.stack(flags,-1)
+ if not np.isfinite(env[mask]).all():raise ValueError(f'{path.name}: non-finite value in a valid cell')
+ return env,mask,flag
+
+def iter_batches(release,plan,batch_size=64,shuffle=False,seed=42,keys=KEYS,env=None):
  rng=np.random.default_rng(seed);order=np.arange(len(plan))
  if shuffle:rng.shuffle(order)
  for pi in order:
@@ -100,17 +161,20 @@ def iter_batches(release,plan,batch_size=64,shuffle=False,seed=42,keys=KEYS):
   if arrays['X'].shape[1:]!=(20,8) or arrays['y'].shape[1:]!=(12,2):raise ValueError('Incompatible shard shapes')
   if arrays['X_mask'].dtype!=bool or not np.isfinite(arrays['X']).all() or not np.isfinite(arrays['y']).all():raise ValueError('Invalid arrays')
   if not np.all(arrays['X'][~arrays['X_mask']]==0):raise ValueError('Invalid missing-value fill')
+  if env is not None:
+   arrays['env'],arrays['env_mask'],arrays['env_valid']=read_sidecar(env[0],item,selected,arrays,env[1])
   row_order=np.arange(len(selected))
   if shuffle:rng.shuffle(row_order)
   for start in range(0,len(selected),batch_size):
    ix=row_order[start:start+batch_size]
    yield {k:v[ix] for k,v in arrays.items()}
 
-def fit_scaler(release,train_plan,batch_size=512):
- """Population moments from valid TRAIN entries only; masks are never scaled."""
+def fit_scaler(release,train_plan,batch_size=512,env=None):
+ """Population moments from valid TRAIN entries only; masks and validity flags are never scaled."""
  count=np.zeros(8);mean=np.zeros(8);m2=np.zeros(8)
  context_n=0;context_mean=np.zeros(2);context_m2=np.zeros(2)
- for b in iter_batches(release,train_plan,batch_size):
+ env_count=env_mean=env_m2=None
+ for b in iter_batches(release,train_plan,batch_size,env=env):
   for j in range(8):
    v=b['X'][...,j][b['X_mask'][...,j]].astype('float64');n=len(v)
    if n:
@@ -120,10 +184,28 @@ def fit_scaler(release,train_plan,batch_size=512):
   v=b['origin_xy_m'];n=len(v);delta=v.mean(0)-context_mean;total=context_n+n
   context_m2+=((v-v.mean(0))**2).sum(0)+delta**2*context_n*n/total
   context_mean+=delta*n/total;context_n=total
+  if 'env' in b:
+   # Same pooled-moment update as the X loop, over VALID entries only. An invalid entry carries a
+   # zero-filled value that never describes the sea, so folding it in would drag every mean toward
+   # zero in proportion to how often that source is unavailable -- worst exactly where coverage is
+   # weakest, which is where the features most need to be on a sane scale.
+   if env_count is None:
+    k=b['env'].shape[1];env_count=np.zeros(k);env_mean=np.zeros(k);env_m2=np.zeros(k)
+   for j in range(len(env_count)):
+    v=b['env'][:,j][b['env_mask'][:,j]].astype('float64');n=len(v)
+    if n:
+     delta=v.mean()-env_mean[j];total=env_count[j]+n
+     env_m2[j]+=((v-v.mean())**2).sum()+delta**2*env_count[j]*n/total
+     env_mean[j]+=delta*n/total;env_count[j]=total
  if context_n==0:raise ValueError('No training examples')
  scale=np.sqrt(m2/np.maximum(count,1));scale[scale<1e-6]=1
  cs=np.sqrt(context_m2/context_n);cs[cs<1]=1
- return dict(mean=mean.tolist(),scale=scale.tolist(),valid_counts=count.tolist(),context_mean=context_mean.tolist(),context_scale=cs.tolist(),train_windows=context_n)
+ out=dict(mean=mean.tolist(),scale=scale.tolist(),valid_counts=count.tolist(),context_mean=context_mean.tolist(),context_scale=cs.tolist(),train_windows=context_n)
+ if env_count is not None:
+  if (env_count==0).any():raise ValueError('An environmental feature has no valid training entry; check the sidecar or drop the block')
+  es=np.sqrt(env_m2/np.maximum(env_count,1));es[es<1e-6]=1
+  out.update(env_blocks=list(env[1]),env_mean=env_mean.tolist(),env_scale=es.tolist(),env_valid_counts=env_count.tolist())
+ return out
 
 def model_input(batch,scaler,context=True):
  mask=batch['X_mask'];x=(batch['X']-np.asarray(scaler['mean']))/np.asarray(scaler['scale'])
@@ -131,6 +213,16 @@ def model_input(batch,scaler,context=True):
  if context:
   c=(batch['origin_xy_m']-scaler['context_mean'])/scaler['context_scale']
   parts.append(np.repeat(c[:,None,:],20,axis=1))
+ if 'env' in batch:
+  if 'env_mean' not in scaler:raise ValueError('Batch carries environmental features but the scaler was fitted without them')
+  e=(batch['env']-np.asarray(scaler['env_mean']))/np.asarray(scaler['env_scale'])
+  # Zeroed where invalid, exactly as X is, so an unavailable source reads as "nothing known" rather
+  # than as an extreme value. The validity flag rides alongside unscaled, which is what lets the
+  # model tell that case apart from a genuine zero.
+  e=np.where(batch['env_mask'],e,0)
+  # Waves and currents barely evolve across a 20-minute input window, so the block is per-window
+  # static context repeated over the steps -- the same treatment origin_xy_m already gets.
+  parts.append(np.repeat(np.concatenate([e,batch['env_valid']],axis=-1)[:,None,:],20,axis=1))
  return np.concatenate(parts,axis=-1).astype('float32')
 
 def velocity_baseline(batch,name):
@@ -172,7 +264,7 @@ def calibrate(release,plan,predict,out,cfg):
  if n==0:raise ValueError('Calibration partition empty')
  path=out/'calibration_scores.npy';scores=np.lib.format.open_memmap(path,mode='w+',dtype='float32',shape=(n,12))
  start=0
- for b in iter_batches(release,plan,cfg['batch_size']):
+ for b in iter_batches(release,plan,cfg['batch_size'],env=env_spec(cfg)):
   mu,sigma=predict(b);s=score_distances(b['y'],mu,sigma)
   if not np.isfinite(s).all():raise ValueError('Non-finite calibration scores')
   scores[start:start+len(s)]=s;start+=len(s)
@@ -202,7 +294,7 @@ def motion_regime(batch,under_way_knots):
 def evaluate(release,plan,predict,out,cfg,role,q=None):
  total=0;error_sum=np.zeros(12);covered_sum=np.zeros(12);area_sum=np.zeros(12)
  by_vessel={};by_month={};by_regime={};examples=[]
- for b in iter_batches(release,plan,cfg['batch_size']):
+ for b in iter_batches(release,plan,cfg['batch_size'],env=env_spec(cfg)):
   mu,sigma=predict(b);err=np.linalg.norm(mu-b['y'],axis=-1)
   if not np.isfinite(err).all() or not np.isfinite(sigma).all() or not (sigma>0).all():raise ValueError('Invalid prediction')
   covered=score_distances(b['y'],mu,sigma)<=q if q is not None else np.zeros_like(err)
@@ -292,7 +384,7 @@ def run_experiment(architecture,cfg):
     from models import train_model,make_predictor
     # beta is resolved per group; everything else in the configuration is shared across the run.
     group_cfg=dict(cfg,beta_nll=group_beta(cfg,group))
-    scaler=fit_scaler(release,plans['train']);write_json(out/'scaler.json',scaler)
+    scaler=fit_scaler(release,plans['train'],env=env_spec(group_cfg));write_json(out/'scaler.json',scaler)
     model=train_model(architecture,release,plans,scaler,out,group_cfg)
     predict=make_predictor(model,scaler,group_cfg)
     evaluate(release,plans['validation'],predict,out,cfg,'validation')

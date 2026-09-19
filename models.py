@@ -1,7 +1,7 @@
 """Three neural architectures with a shared, metre-consistent training contract."""
 import math
 import numpy as np
-from workflow import iter_batches,model_input,write_json
+from workflow import iter_batches,model_input,write_json,env_width,env_spec
 import tensorflow as tf
 from tensorflow import keras
 L=keras.layers
@@ -49,9 +49,15 @@ def make_ade_metric(scale):
  def ade_m(y,p):return tf.reduce_mean(tf.norm((p[...,:2]-y)*scale,axis=-1))
  return ade_m
 
+def input_width(cfg):
+ """Total input features. One definition, because model_input, the tf.data signature and the model
+ contract must agree -- three separate copies of this arithmetic is how a silent shape mismatch gets
+ in, and tf.data would report it as a cardinality error far from the cause."""
+ return (18 if cfg['use_spatial_context'] else 16)+env_width(tuple(cfg.get('env_blocks') or ()))
+
 def build_model(architecture,cfg):
  configure_runtime(cfg)
- width=cfg['width'];features=18 if cfg['use_spatial_context'] else 16
+ width=cfg['width'];features=input_width(cfg)
  inp=L.Input((20,features),name='history_features_masks_context')
  x=L.Dense(width,activation='relu',name='input_projection')(inp)
  if architecture in ('bilstm_only','bilstm_attention'):
@@ -84,9 +90,9 @@ def dataset(release,plan,scaler,cfg,training):
  epoch=[0]
  def generate():
   seed=cfg['seed']+epoch[0];epoch[0]+=1
-  for b in iter_batches(release,plan,cfg['batch_size'],shuffle=training,seed=seed):
+  for b in iter_batches(release,plan,cfg['batch_size'],shuffle=training,seed=seed,env=env_spec(cfg)):
    yield model_input(b,scaler,cfg['use_spatial_context']),b['y']/cfg['target_scale_m']
- features=18 if cfg['use_spatial_context'] else 16
+ features=input_width(cfg)
  ds=tf.data.Dataset.from_generator(generate,output_signature=(tf.TensorSpec((None,20,features),tf.float32),tf.TensorSpec((None,12,2),tf.float32)))
  batches=sum(math.ceil(p['n']/cfg['batch_size']) for p in plan)
  ds=ds.apply(tf.data.experimental.assert_cardinality(batches))
@@ -98,7 +104,7 @@ def train_model(architecture,release,plans,scaler,out,cfg):
  keras.backend.clear_session();keras.utils.set_random_seed(cfg['seed'])
  model=build_model(architecture,cfg)
  lines=[];model.summary(print_fn=lambda s,**kw:lines.append(s));(out/'architecture.txt').write_text('\n'.join(lines))
- write_json(out/'model_contract.json',dict(architecture=architecture,parameters=model.count_params(),input_features=18 if cfg['use_spatial_context'] else 16,output_shape=list(model.output_shape),target_scale_m=cfg['target_scale_m'],probabilistic=cfg['probabilistic'],sigma_floor_m=cfg['sigma_floor_m'],beta_nll=cfg.get('beta_nll',0.),monitor=cfg.get('monitor','val_ade_m')))
+ write_json(out/'model_contract.json',dict(architecture=architecture,parameters=model.count_params(),input_features=input_width(cfg),env_blocks=list(cfg.get('env_blocks') or ()),output_shape=list(model.output_shape),target_scale_m=cfg['target_scale_m'],probabilistic=cfg['probabilistic'],sigma_floor_m=cfg['sigma_floor_m'],beta_nll=cfg.get('beta_nll',0.),monitor=cfg.get('monitor','val_ade_m')))
  # Select on metre error, not likelihood: a single heavy-tailed validation example can swing the NLL
  # several-fold, so val_loss selected checkpoints up to 55 m worse than the run's best. Both are logged.
  monitor=cfg.get('monitor','val_ade_m')
@@ -108,7 +114,7 @@ def train_model(architecture,release,plans,scaler,out,cfg):
  write_json(out/'history.json',history.history)
  # Always reload the validation-selected checkpoint; also tests custom-layer serialization.
  loaded=keras.models.load_model(out/'best_model.keras',compile=False)
- sample=next(iter_batches(release,plans['validation'],2));x=model_input(sample,scaler,cfg['use_spatial_context'])
+ sample=next(iter_batches(release,plans['validation'],2,env=env_spec(cfg)));x=model_input(sample,scaler,cfg['use_spatial_context'])
  if not np.isfinite(loaded(x,training=False).numpy()).all():raise ValueError('Reloaded model failed')
  return loaded
 
