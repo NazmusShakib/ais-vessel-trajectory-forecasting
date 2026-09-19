@@ -1,7 +1,7 @@
 import unittest,tempfile,json
 from pathlib import Path
 import numpy as np
-from workflow import velocity_baseline,model_input,fit_scaler,select_plan,score_distances,calibrate,HORIZONS
+from workflow import velocity_baseline,model_input,fit_scaler,select_plan,score_distances,calibrate,HORIZONS,iter_batches,env_width,ENV_BLOCKS
 import pandas as pd
 
 class ContractTests(unittest.TestCase):
@@ -33,6 +33,39 @@ class ContractTests(unittest.TestCase):
    plan=[dict(file='a.npz',source_windows=2,rows=None,n=2)]
    scaler=fit_scaler(d,plan)
    self.assertEqual(scaler['mean'][2],10);self.assertEqual(scaler['valid_counts'][2],20)
+ def env_fixture(self,d,aligned=True):
+  """A one-shard release plus a row-aligned sidecar, optionally with a mismatched key."""
+  b=self.batch(2);shard=Path(d)/'groups/Cargo/train';shard.mkdir(parents=True)
+  np.savez(shard/'s.npz',**b)
+  side=Path(d)/'side/groups/Cargo/train';side.mkdir(parents=True)
+  pd.DataFrame(dict(segment_id=b['segment_id'] if aligned else np.array(['elsewhere']*2),
+   origin_time_ns=b['origin_time_ns'],cur_east=[0.5,9.0],cur_north=[0.,9.],
+   cur_rel_sin=[0.,9.],cur_rel_cos=[1.,9.],current_valid=[True,False])).to_parquet(side/'s.parquet')
+  return [dict(file='groups/Cargo/train/s.npz',source_windows=2,rows=None,n=2)],(Path(d)/'side',('CUR',))
+ def test_env_block_width_matches_model_input(self):
+  with tempfile.TemporaryDirectory(dir=Path(__file__).parent/'qa') as d:
+   plan,env=self.env_fixture(d)
+   b=next(iter_batches(d,plan,2,env=env))
+   self.assertEqual(b['env'].shape[1]+b['env_valid'].shape[1],env_width(('CUR',)))
+   scaler=dict(mean=[0]*8,scale=[1]*8,context_mean=[0.,0.],context_scale=[1,1],
+    env_mean=[0]*4,env_scale=[1]*4,env_blocks=['CUR'])
+   x=model_input(b,scaler);self.assertEqual(x.shape,(2,20,18+env_width(('CUR',))))
+ def test_env_invalid_rows_are_zeroed_and_flagged(self):
+  """An unavailable source must read as nothing known, not as whatever filler the sidecar carried."""
+  with tempfile.TemporaryDirectory(dir=Path(__file__).parent/'qa') as d:
+   plan,env=self.env_fixture(d)
+   b=next(iter_batches(d,plan,2,env=env))
+   scaler=dict(mean=[0]*8,scale=[1]*8,context_mean=[0.,0.],context_scale=[1,1],
+    env_mean=[0]*4,env_scale=[1]*4,env_blocks=['CUR'])
+   x=model_input(b,scaler)
+   self.assertTrue((x[1,0,18:22]==0).all())      # invalid row: features zeroed despite 9.0 in the file
+   self.assertEqual(x[1,0,22],0)                  # and its validity flag is off
+   self.assertEqual(x[0,0,18],0.5);self.assertEqual(x[0,0,22],1)
+ def test_env_sidecar_misalignment_is_rejected(self):
+  """The sidecar is row-aligned rather than key-joined, so the keys must be checked, not trusted."""
+  with tempfile.TemporaryDirectory(dir=Path(__file__).parent/'qa') as d:
+   plan,env=self.env_fixture(d,aligned=False)
+   with self.assertRaises(ValueError):next(iter_batches(d,plan,2,env=env))
  def test_role_plan_is_deterministic(self):
   frame=pd.DataFrame([dict(group='Cargo',split=r,file=f'{r}/{i}',windows=100,sha256='a') for r in ['train','test'] for i in range(8)])
   cfg=dict(seed=42,max_shards=2,rows_per_shard=10)
