@@ -63,7 +63,8 @@ def config(mode='smoke',groups=None,*,device=None,release=None,runs_dir=None,job
   probabilistic=True,verify_checksums=True)
 
 def release_info(cfg):
- release=Path(cfg['release']).resolve();manifest=json.loads((release/'manifest.json').read_text())
+ release=Path(cfg['release']).resolve();
+ manifest=json.loads((release/'manifest.json').read_text())
  if manifest['status']!='complete':raise ValueError('Release is not complete')
  if manifest['summary']['windows']!=20599126:raise ValueError('This workflow was built for release full_5_60_20260913T163619Z; review a changed release explicitly')
  index=pd.read_csv(release/'shard_index.csv')
@@ -299,6 +300,7 @@ def run_experiment(architecture,cfg):
     result=evaluate(release,plans['test'],predict,out,cfg,'test',q)
     rows.append(dict(group=group,model=architecture,selected_baseline=False,**result))
    print(f'{group} complete.',flush=True)
+   print(''+'-'*80,flush=True)
   pd.DataFrame(rows).to_csv(run/'comparison.csv',index=False)
   write_json(run/'skipped_groups.json',skips)
   identity['status']='complete';identity['completed_at']=datetime.now(timezone.utc).isoformat();write_json(run/'run.json',identity)
