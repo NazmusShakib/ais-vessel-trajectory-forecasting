@@ -129,6 +129,43 @@ per-group `beta_nll` unnecessary rather than merely tuned: the zero inflation th
 for *is* the stationary component of the mixture. That is a falsifiable prediction — if beta-NLL is
 still needed after the output is made bimodal, the zero inflation was not about regime after all.
 
+### The prediction was tested on 19 September 2026, and it failed
+
+Three Port_Service pilot runs, `bilstm_attention`, 15 epochs, release 0918, identical cohorts.
+
+| Run | val-loss jitter | test ADE | val_loss |
+|---|---:|---:|---:|
+| A · Gaussian, beta=0.5 | **0.275** | 728.8 | 2.291 |
+| B · Gaussian, beta=0 | 0.729 | 717.8 | 2.972 |
+| C · Mixture K=2, beta=0 | **0.726** | 751.0 | −1.850 |
+
+**The mixture did not replace beta-NLL.** Its jitter is 0.726 against plain Gaussian's 0.729 — no
+improvement whatsoever. Mixture-mean ADE was also worse, which was expected and means little on its
+own, since the mean of a bimodal prediction is the between-modes point this design exists to avoid.
+
+The large NLL gain is real — B and C are on the same scale, verified to 5e-07 by a one-component
+mixture reproducing the Gaussian loss — but **it is not evidence of bimodal modelling**. Inspecting
+the trained components:
+
+- both sit at the **origin**: median 60-minute predicted displacement 0.2 m and 0.0 m
+- one is broad (sigma about 4 km), the other a near-delta at the 1 m sigma floor
+- mixture weights are **0.462 against 0.464** for windows that stayed and windows that departed
+
+So the model learned the *marginal* shape — a spike on the stationary mass plus a diffuse blob — and
+nothing about *which* vessel departs. It earns its likelihood from the 78% of windows that move about
+a metre, and represents departures as undirected diffusion.
+
+**A pilot of 15 epochs on 8,192 windows with one seed is thin evidence about training stability**, and
+P2.0 requires the corrected full run before any result here is attributable. The failure is recorded
+now because the prediction was pre-registered, not because the experiment is conclusive.
+
+What the failure does **not** show is that the target is unimodal. Measurement 2 above is a property
+of the data, not of any model, and it stands. What it shows is that an *unsupervised* gate cannot find
+the split. A supervised one can, comfortably: see `DEPARTURE_PREDICTABILITY.md`, where a classifier on
+the same inputs reaches AUC 0.961 on the strictly-stationary Port_Service population. **That redirects
+the design from a mixture density to P2.0's design C, and it is the reason the mixture route is not
+recommended.**
+
 **Still open.** The under-way threshold. `under_way_knots` defaults to 0.5 through a `cfg.get` and is
 not in `config()`, with no recorded justification. It does very different work per group — the share
 labelled under way moves from 42.2% to 19.1% for Research_Offshore between 0.2 and 2.0 kn, but only

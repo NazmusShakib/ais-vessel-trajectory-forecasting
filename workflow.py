@@ -90,6 +90,8 @@ def config(mode='smoke',groups=None,*,device=None,release=None,runs_dir=None,job
   # point of the ablation, and the reason this never defaults on.
   env_sidecar=str(resolve_path(settings.get('AIS_ENV_SIDECAR') or '../env_sidecar')),
   env_blocks=tuple(b.strip().upper() for b in (settings.get('AIS_ENV_BLOCKS') or '').split(',') if b.strip()),
+  # 1 keeps the single-Gaussian head. >1 selects a trajectory-level mixture; see REGIME_BIMODALITY.md.
+  mixture_components=positive_int(settings.get('AIS_MIXTURE_COMPONENTS') or 1,'mixture_components'),
   probabilistic=True,verify_checksums=True)
 
 def release_info(cfg):

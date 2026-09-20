@@ -18,6 +18,7 @@ def parser():
     p.add_argument('--epochs', type=int)
     p.add_argument('--deterministic', action='store_true')
     p.add_argument('--beta-nll', type=float, help='beta-NLL weighting for every group, overriding the zero-inflated per-group defaults (0 reproduces plain Gaussian NLL)')
+    p.add_argument('--mixture-components', type=int, help='K>1 selects a trajectory-level Gaussian mixture output instead of a single Gaussian; incompatible with a non-zero beta-nll (see REGIME_BIMODALITY.md)')
     p.add_argument('--monitor', choices=['val_ade_m', 'val_loss'], help='Quantity used to select checkpoints, reduce the learning rate and stop early')
     p.add_argument('--check-config', action='store_true', help='Validate release metadata, display cohort counts and check hardware; do not train')
     return p
@@ -44,6 +45,10 @@ def main():
         # An explicit value applies to every group, replacing the per-group defaults.
         cfg['beta_nll'] = a.beta_nll
         cfg['beta_nll_by_group'] = {}
+    if a.mixture_components is not None:
+        if a.mixture_components < 1:
+            p.error('mixture-components must be at least 1')
+        cfg['mixture_components'] = a.mixture_components
     if a.monitor is not None:
         cfg['monitor'] = a.monitor
     if a.check_config:
