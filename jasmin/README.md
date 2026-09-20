@@ -111,3 +111,52 @@ Successful jobs save `best_model.keras`, the scaler, calibration and evaluation 
 - [Scientific analysis servers](https://help.jasmin.ac.uk/docs/interactive-computing/sci-servers/)
 - [Python environments](https://help.jasmin.ac.uk/docs/software-on-jasmin/python-virtual-environments/)
 - [TensorFlow installation](https://www.tensorflow.org/install/pip)
+
+## Environmental blocks and seeds
+
+Both wrappers take four arguments: **model, mode, environmental blocks, seed.** The last two are
+optional and default to a trajectory-only run.
+
+```bash
+sbatch jasmin/train_gpu.sbatch bilstm_attention full                      # control, default seed
+sbatch jasmin/train_gpu.sbatch bilstm_attention full none 1               # control, seed 1
+sbatch jasmin/train_gpu.sbatch bilstm_attention full CUR 1                # currents only
+sbatch jasmin/train_gpu.sbatch bilstm_attention full CUR,SSH,WAV,WND 1    # all four blocks
+```
+
+Blocks are **comma-separated**, never space-separated. A space-separated list survives neither
+`sbatch` nor the `exec`, arriving as a single argument that `argparse` rejects as an invalid choice.
+
+Results are written to `$AIS_RUNS_DIR/<arm>_seed<N>/`, so arms and seeds never share a directory.
+
+Environmental runs additionally need `AIS_ENV_SIDECAR` set in `jasmin/config.sh`, pointing at the
+sidecar tree built by `build_env_sidecar.py` **against the same release**. A sidecar from another
+release is row-aligned to the wrong shards; `read_sidecar` checks the carried `segment_id` and
+`origin_time_ns` and will refuse it rather than train on a misalignment.
+
+### What to upload
+
+| What | Size | Needed for |
+|---|---:|---|
+| this folder (code only, no `runs/`, `ais_results/`, `jobs/`, `__pycache__`) | ~1 MB | always |
+| the release, e.g. `full_5_60_20260918T072424Z/` | 5.5 GB | always |
+| `env_sidecar/` | 1.3 GB | environmental runs only |
+
+`env_cache/` is **not** needed: it is the raw NetCDF the sidecar was built from, and nothing on
+JASMIN reads it. Transfer the release and sidecar as tar archives — 4,912 small files each.
+
+### The full ablation
+
+```bash
+DRY_RUN=1 bash jasmin/submit_ablation.sh    # print the sbatch calls, submit nothing
+bash jasmin/submit_ablation.sh              # 6 arms x 5 seeds x 7 groups = 210 runs
+```
+
+**Several seeds per arm is required, not optional.** The trajectory-only control was measured
+disagreeing with itself by 8.6% (Cargo) and 4.4% (Port_Service) at pilot scale, against an expected
+effect of 2.2%; a single run per arm cannot separate the effect from the initialisation. The control
+must be run on the same seeds as every other arm.
+
+Set `--array=0-6%7` in the sbatch file to run the seven groups concurrently rather than one at a
+time. Measured locally on CPU, one full pass over all groups took 13.2 hours sequentially, bounded
+by Unknown at 5.6 h and Port_Service at 3.5 h.

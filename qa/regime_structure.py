@@ -8,11 +8,12 @@ from pathlib import Path
 sys.path.insert(0,'/Users/shuvo/anaconda_projects/ais_liverpool/training_5_60_v1')
 from workflow import motion_regime, KNOTS_PER_MS
 REL=Path('/Users/shuvo/anaconda_projects/ais_liverpool/outputs/vessel_group_forecasting/data/full_5_60_20260918T072424Z')
-SHARDS=8
+SHARDS=None
 idx=pd.read_csv(REL/'shard_index.csv')
 
 def load(group):
-    fs=idx[(idx.group==group)&(idx.split=='test')].sort_values('file').file.tolist()[:SHARDS]
+    fs=idx[(idx.group==group)&(idx.split=='test')].sort_values('file').file.tolist()
+    if SHARDS: fs=fs[:SHARDS]
     X=[];M=[];Y=[]
     for f in fs:
         with np.load(REL/f,allow_pickle=False) as z:

@@ -562,16 +562,32 @@ position need no shard change.
 The point is not that environmental data helps, but **which source helps which group**. Five runs
 per group, identical seed and splits:
 
-| Run | Blocks | Tests |
-|---|---|---|
-| A | none | reproduces the current result — a control |
-| B | `CUR` | tidal currents alone |
-| C | `WAV` | waves alone |
-| D | `WND` | wind alone |
-| E | all | whether the sources are complementary or redundant |
+| Run | Blocks | Features | Tests |
+|---|---|---:|---|
+| A | none | 18 | reproduces the current result — a control |
+| B | `CUR` | 23 | tidal currents alone |
+| C | `WAV` | 25 | waves alone |
+| D | `WND` | 24 | wind alone |
+| F | `SSH` | 21 | **tidal phase alone** — added 20 September 2026 |
+| E | all four | 39 | whether the sources are complementary or redundant |
+
+**Arm F was missing from the original design and is a real gap, not a formality.** This plan already
+argues that `zos` may be the better tidal feature: it is defined in 670 cells against the current
+field's 631, it reaches 98.5% of test windows against `current_valid`'s 94.6%, and it encodes tidal
+phase in a single scalar where currents need a vector. Folding it into `E` alone makes it impossible
+to tell whether sea level or currents carried any tidal effect. It is also the **cheapest arm**, at
+three features against the current block's five.
 
 Declared before running: **B should lift Port_Service and Research_Offshore; C should lift Cargo,
 Tanker and Passenger; D should be smallest and should concentrate in light, high-sided vessels.**
+
+Declared for F on 20 September 2026, before it was run: **F should match or beat B on the near-berth
+groups — Tanker, Passenger, Port_Service — because sea level is defined in cells where the velocity
+field is not, and those are exactly the groups whose window origins fall in the dock estate. Where
+`CUR` and `SSH` are both available, F should be the weaker of the two, since a scalar phase carries
+less than a velocity vector. F beating B on the open-water groups would be the disconfirming
+outcome: it would suggest the tidal signal is acting through something other than the water actually
+moving the hull.**
 Uniform improvement across all groups, or improvement in the wrong groups, means the features are
 correlated rather than causal.
 
@@ -592,7 +608,8 @@ averages 970 m at 5–30 minutes and 2,590 m at 35–60 — so a single 12-horiz
 long band and a short-horizon effect would be averaged away.
 
 **Two comparisons, so correct for two.** Splitting doubles the opportunity for a spurious hit. Any
-claim of significance must account for both bands.
+claim of significance must account for both bands. With six arms and two bands the comparison count
+is larger again; state the correction used.
 
 ### The power problem, measured — and it is the binding constraint
 

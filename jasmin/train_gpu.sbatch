@@ -16,4 +16,5 @@
 set -euo pipefail
 : "${SLURM_SUBMIT_DIR:?Submit with sbatch from the training_5_60_v1 folder}"
 cd "$SLURM_SUBMIT_DIR"
-exec bash jasmin/run_group.sh gpu "${1:-bilstm_attention}" "${2:-full}"
+# Args: model, mode, env blocks (comma-separated or none), seed.
+exec bash jasmin/run_group.sh gpu "${1:-bilstm_attention}" "${2:-full}" "${3:-none}" "${4:-}"

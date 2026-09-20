@@ -8,5 +8,10 @@ export AIS_DATASET_DIR='/REPLACE_WITH_EXTRACTED_DATASET/full_5_60_20260918T07242
 export AIS_RUNS_DIR='/REPLACE_WITH_RESULTS_STORAGE/ais_results'
 export AIS_JOBS_DIR='/REPLACE_WITH_RESULTS_STORAGE/ais_worker_logs'
 export AIS_BATCH_SIZE=64
+# Row-aligned environmental sidecars, one Parquet per release shard. Required only when a run
+# requests environmental blocks; leave unset for trajectory-only runs. Must be the directory
+# built by build_env_sidecar.py against THIS release -- a sidecar from another release is
+# row-aligned to the wrong shards, and read_sidecar will refuse it on the carried keys.
+export AIS_ENV_SIDECAR='/REPLACE_WITH_EXTRACTED_SIDECAR/env_sidecar'
 # If your chosen Python environment needs a module or activation, add it here.
 # Keep the module version/environment fixed for every comparison experiment.
