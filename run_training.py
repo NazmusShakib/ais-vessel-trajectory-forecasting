@@ -18,6 +18,9 @@ def parser():
     p.add_argument('--epochs', type=int)
     p.add_argument('--deterministic', action='store_true')
     p.add_argument('--beta-nll', type=float, help='beta-NLL weighting for every group, overriding the zero-inflated per-group defaults (0 reproduces plain Gaussian NLL)')
+    p.add_argument('--seed', type=int, help='Training seed. Repeat a configuration across seeds to establish the run-to-run noise floor before reading any ablation difference as signal')
+    p.add_argument('--env-blocks', nargs='*', choices=['CUR', 'SSH', 'WAV', 'WND'], help='Environmental feature blocks to append; omit or pass none for a trajectory-only run')
+    p.add_argument('--env-sidecar', help='Directory of row-aligned environmental sidecars (default ../env_sidecar)')
     p.add_argument('--mixture-components', type=int, help='K>1 selects a trajectory-level Gaussian mixture output instead of a single Gaussian; incompatible with a non-zero beta-nll (see REGIME_BIMODALITY.md)')
     p.add_argument('--monitor', choices=['val_ade_m', 'val_loss'], help='Quantity used to select checkpoints, reduce the learning rate and stop early')
     p.add_argument('--check-config', action='store_true', help='Validate release metadata, display cohort counts and check hardware; do not train')
@@ -45,6 +48,12 @@ def main():
         # An explicit value applies to every group, replacing the per-group defaults.
         cfg['beta_nll'] = a.beta_nll
         cfg['beta_nll_by_group'] = {}
+    if a.seed is not None:
+        cfg['seed'] = a.seed
+    if a.env_blocks is not None:
+        cfg['env_blocks'] = tuple(a.env_blocks)
+    if a.env_sidecar:
+        cfg['env_sidecar'] = a.env_sidecar
     if a.mixture_components is not None:
         if a.mixture_components < 1:
             p.error('mixture-components must be at least 1')

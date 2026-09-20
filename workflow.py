@@ -11,6 +11,16 @@ import numpy as np
 import pandas as pd
 from settings import read_settings,resolve_path,positive_int
 HORIZONS=np.arange(5,61,5)
+# Horizon band boundary, in minutes. Reported separately because the expected environmental effect is
+# a GRADIENT, not a level: EnvShip measures 8.2% error reduction at 10 minutes but 2.2% at 60, so a
+# short-horizon effect would be averaged away by a single 12-horizon mean, where the long horizons
+# dominate (Cargo: 970 m at 5-30 against 2,590 m at 35-60).
+#
+# Declared 20 September 2026, BEFORE the full-scale environmental ablation, so that the split is
+# pre-registered rather than chosen after seeing results. Both bands are reported on every run and
+# neither may be dropped. See ENVIRONMENTAL_JOIN_PLAN.md for the pre-registration and the power
+# figures -- note the short band is the NOISIER of the two, so a null there is uninformative.
+HORIZON_SPLIT_MIN=30
 ROLES=('train','validation','calibration','test')
 GROUPS=('Cargo','Tanker','Passenger','Port_Service','Research_Offshore','Fishing','Unknown')
 KEYS=('X','X_mask','y','origin_xy_m','origin_time_ns','input_observation_time_ns','MMSI','segment_id')
@@ -313,8 +323,14 @@ def evaluate(release,plan,predict,out,cfg,role,q=None):
    for i in range(min(3-len(examples),len(mu))):
     examples.append(dict(X=b['X'][i],y=b['y'][i],mu=mu[i],sigma=sigma[i],origin_xy_m=b['origin_xy_m'][i],MMSI=b['MMSI'][i],origin_time_ns=b['origin_time_ns'][i]))
  if total==0:raise ValueError(f'No {role} examples')
- result=dict(role=role,windows=total,ade_m=float(error_sum.mean()/total),fde_60_m=float(error_sum[-1]/total),plan_hash=plan_hash(plan),mode=cfg['mode'])
- horizons=pd.DataFrame(dict(horizon_min=HORIZONS,mean_error_m=error_sum/total))
+ short=HORIZONS<=HORIZON_SPLIT_MIN
+ result=dict(role=role,windows=total,ade_m=float(error_sum.mean()/total),fde_60_m=float(error_sum[-1]/total),plan_hash=plan_hash(plan),mode=cfg['mode'],
+  # Pre-registered horizon bands; report both, always. The aggregate above is a mean over a range
+  # where error grows roughly threefold, so it is dominated by the long band.
+  ade_5_30_m=float(error_sum[short].mean()/total),ade_35_60_m=float(error_sum[~short].mean()/total),
+  horizon_split_min=int(HORIZON_SPLIT_MIN))
+ horizons=pd.DataFrame(dict(horizon_min=HORIZONS,mean_error_m=error_sum/total,
+  band=np.where(short,f'5_{HORIZON_SPLIT_MIN}',f'{HORIZON_SPLIT_MIN+5}_60')))
  if q is not None:
   horizons['empirical_coverage']=covered_sum/total;horizons['mean_region_area_m2']=area_sum/total
   result['mean_horizon_coverage']=float(covered_sum.mean()/total)
@@ -324,6 +340,8 @@ def evaluate(release,plan,predict,out,cfg,role,q=None):
  for key,(n,es,_,_) in by_regime.items():
   result[f'{key}_share']=float(n/total)
   result[f'{key}_ade_m']=float(es.mean()/n)
+  result[f'{key}_ade_5_30_m']=float(es[short].mean()/n)
+  result[f'{key}_ade_35_60_m']=float(es[~short].mean()/n)
  for label,agg in [('vessel',by_vessel),('month',by_month),('regime',by_regime)]:
   rows=[]
   for key,(n,es,cs,ars) in agg.items():

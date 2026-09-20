@@ -577,6 +577,72 @@ correlated rather than causal.
 
 Run B and C first — D is the cheapest to add once the pipeline exists and the least likely to matter.
 
+### Pre-registration — declared 20 September 2026, before the full-scale ablation
+
+Recorded here rather than in a commit message so the git timestamp is the evidence that it preceded
+the result.
+
+**Reporting is split into two horizon bands: 5–30 minutes and 35–60 minutes.** Both are reported on
+every run and neither may be dropped. `HORIZON_SPLIT_MIN` in `workflow.py` is 30; `evaluate()` writes
+`ade_5_30_m` and `ade_35_60_m`, and the same split per regime.
+
+**Why split.** The expected effect is a gradient, not a level. EnvShip measures 8.2% error reduction
+at a 10-minute horizon against 2.2% at 60. Error grows roughly threefold across our range — Cargo
+averages 970 m at 5–30 minutes and 2,590 m at 35–60 — so a single 12-horizon mean is dominated by the
+long band and a short-horizon effect would be averaged away.
+
+**Two comparisons, so correct for two.** Splitting doubles the opportunity for a spurious hit. Any
+claim of significance must account for both bands.
+
+### The power problem, measured — and it is the binding constraint
+
+Four seeds of the trajectory-only control, pilot scale, per group. **The control disagrees with itself
+by more than the effect being hunted:**
+
+| | 12-horizon CV | 5–30 min CV | 35–60 min CV |
+|---|---:|---:|---:|
+| Cargo | 8.57% | **11.09%** | 7.95% |
+| Port_Service | 4.42% | **8.35%** | **3.41%** |
+
+Cargo's control ADE ranged 1,473–1,780 m across seeds — a 21% swing from initialisation alone.
+
+Runs per arm to detect a 2.2% effect at 80% power:
+
+| Cell | Runs per arm |
+|---|---:|
+| Cargo, 5–30 min | 399 |
+| Cargo, 35–60 min | 205 |
+| Port_Service, 5–30 min | 226 |
+| **Port_Service, 35–60 min** | **38** |
+
+**Note the asymmetry before interpreting any null.** The short band is the *noisier* of the two, so a
+null result there is uninformative — yet that is exactly where EnvShip found its largest effect. The
+statistically strongest cell in this design is Port_Service at 35–60 minutes, which is where the
+effect is expected to be smallest. Say so when reporting, rather than presenting a short-band null as
+evidence of absence.
+
+**Consequences, binding on the full run:**
+
+- **"Identical seed" is not enough.** The comparison above holds the seed fixed and still varies by
+  8–11%, because changing the input width changes the initialisation. Every arm needs **multiple
+  seeds**, and differences must be reported with a spread, never as a single number.
+- Pilot scale cannot answer the question at all. The full run — more data, more epochs — is not
+  procedure here; it is what makes the variance small enough for the effect to be visible.
+- Train on the **covered era alone** (2024-08-04 onward, 53–57% of training windows), or the
+  environmental arms differ from the control in population as well as in features.
+
+### A pilot ablation was already run, and it was uninformative
+
+Declared for transparency, since the registration above is not blind: A–E were run on Cargo and
+Port_Service at pilot scale on 19–20 September 2026. Every effect fell within 0.13–1.69 standard
+deviations of the control's own seed-to-seed spread, including the one apparent improvement
+(Cargo, `WND`, −1.1%, which is 0.13 sd and would need 871 runs per arm to establish). Cargo degraded
+monotonically with feature count — 18 features 1,780 m, 23–25 features 1,811–1,926 m, 39 features
+2,038 m — which is as consistent with four draws from one distribution as with a capacity cost.
+
+**Nothing in that pilot is evidence for or against the environmental hypothesis**, and no prediction
+above was adjusted in light of it.
+
 ### Met Office wind — access and consistency
 
 | Route | Notes |

@@ -1,7 +1,7 @@
 import unittest,tempfile,json
 from pathlib import Path
 import numpy as np
-from workflow import velocity_baseline,model_input,fit_scaler,select_plan,score_distances,calibrate,HORIZONS,iter_batches,env_width,ENV_BLOCKS
+from workflow import velocity_baseline,model_input,fit_scaler,select_plan,score_distances,calibrate,HORIZONS,iter_batches,env_width,ENV_BLOCKS,HORIZON_SPLIT_MIN
 import pandas as pd
 
 class ContractTests(unittest.TestCase):
@@ -66,6 +66,17 @@ class ContractTests(unittest.TestCase):
   with tempfile.TemporaryDirectory(dir=Path(__file__).parent/'qa') as d:
    plan,env=self.env_fixture(d,aligned=False)
    with self.assertRaises(ValueError):next(iter_batches(d,plan,2,env=env))
+ def test_horizon_bands_partition_the_horizons(self):
+  """Both bands must be non-empty and together cover every horizon exactly once.
+
+  The bands are pre-registered, so a change to HORIZON_SPLIT_MIN that silently emptied one of them
+  would invalidate the registration rather than merely alter a report.
+  """
+  short=HORIZONS<=HORIZON_SPLIT_MIN
+  self.assertTrue(short.any());self.assertTrue((~short).any())
+  self.assertEqual(short.sum()+(~short).sum(),len(HORIZONS))
+  self.assertEqual(sorted([*HORIZONS[short],*HORIZONS[~short]]),sorted(HORIZONS))
+  self.assertEqual(int(HORIZONS[short].max()),HORIZON_SPLIT_MIN)
  def test_role_plan_is_deterministic(self):
   frame=pd.DataFrame([dict(group='Cargo',split=r,file=f'{r}/{i}',windows=100,sha256='a') for r in ['train','test'] for i in range(8)])
   cfg=dict(seed=42,max_shards=2,rows_per_shard=10)
