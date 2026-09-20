@@ -297,9 +297,15 @@ def motion_regime(batch,under_way_knots):
  well as by group and horizon. Uses the raw SOG feature (index 2, metres per second) over valid
  input steps only; windows with no valid SOG are labelled separately rather than assumed stationary.
  """
- sog=np.where(batch['X_mask'][...,2],batch['X'][...,2],np.nan)
- with np.errstate(invalid='ignore'):
-  mean_sog=np.nanmean(np.where(np.isnan(sog),np.nan,sog),axis=1)
+ # Masked mean without nanmean. A window whose twenty input steps all carry an invalid SOG gives
+ # nanmean an empty slice: it returns NaN, which is what 'sog_unknown' below is for, but it also
+ # emits a RuntimeWarning per call. An earlier np.errstate(invalid='ignore') here did not suppress
+ # it -- errstate governs floating-point flags, while 'Mean of empty slice' comes from warnings.warn
+ # inside numpy's nanfunctions -- so JASMIN logs filled with it. Summing over the mask avoids
+ # creating the empty slice at all, and skips a NaN round-trip through the whole array.
+ valid=batch['X_mask'][...,2]
+ n=valid.sum(1)
+ mean_sog=np.where(n>0,(batch['X'][...,2]*valid).sum(1)/np.maximum(n,1),np.nan)
  out=np.where(mean_sog>=under_way_knots/KNOTS_PER_MS,'under_way','not_under_way')
  return np.where(np.isfinite(mean_sog),out,'sog_unknown')
 
