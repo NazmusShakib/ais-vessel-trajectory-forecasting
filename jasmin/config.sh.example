@@ -13,5 +13,21 @@ export AIS_BATCH_SIZE=64
 # built by build_env_sidecar.py against THIS release -- a sidecar from another release is
 # row-aligned to the wrong shards, and read_sidecar will refuse it on the carried keys.
 export AIS_ENV_SIDECAR='/REPLACE_WITH_EXTRACTED_SIDECAR/env_sidecar'
+# TensorFlow C++ log verbosity. 0 shows everything; 2 suppresses INFO and WARNING and is what
+# workflow.py sets for itself, so leaving this commented out already gives a quiet log. Exporting it
+# here overrides that, because workflow.py uses os.environ.setdefault.
+#
+# CAVEAT, and the reason this is commented out rather than set: level 3 additionally suppresses
+# ERROR. The only thing it hides that 2 does not is TensorFlow's own failures -- and the most likely
+# failure on a first JASMIN submission is exactly that: CUDA not initialising, or the allocated GPU
+# not being visible. At level 3 the job then falls back to CPU in silence, finishing many times
+# slower with a clean-looking slurm-*.err. You would be debugging by wall-clock time instead of by
+# reading the error.
+#
+# Enable it only AFTER a GPU run has succeeded and you know what a healthy log looks like. Until
+# then, GPU access is unverified: `useraccounts` must show the orchid role, and a login account
+# alone does not grant it.
+# export TF_CPP_MIN_LOG_LEVEL=3
+
 # If your chosen Python environment needs a module or activation, add it here.
 # Keep the module version/environment fixed for every comparison experiment.
