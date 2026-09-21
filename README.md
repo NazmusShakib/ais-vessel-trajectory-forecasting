@@ -57,6 +57,76 @@ The training release contains 20,599,126 windows in 5,101 NPZ shards. This folde
 
 The pipeline never re-splits overlapping windows. The same MMSI may appear in several periods; this is not an unseen-vessel experiment.
 
+## Environmental data (optional)
+
+Currents, sea level, waves and wind can be joined onto every window and supplied to the model as
+extra input channels. This is **off by default**; nothing below affects a trajectory-only run.
+
+### Two directories, different jobs
+
+| Directory | Size | What it is |
+|---|---:|---|
+| `../env_cache/` | 435 MB | raw NetCDF downloaded from Copernicus Marine and ECMWF. Re-downloadable; **not needed on a cluster** |
+| `../env_sidecar/` | 1.3 GB | 4,912 Parquet files, one per release shard, row-aligned. **This is what training reads** |
+
+`env_cache` holds gridded model output — a value per grid cell per hour. `env_sidecar` holds one row
+per window: what the sea was doing at that vessel's position and time. Build the second from the
+first with `build_env_sidecar.py` (about two minutes for the full release); the release itself is
+never modified, because it is frozen and checksummed.
+
+### Sources
+
+| File | Variables | Grid |
+|---|---|---|
+| `cur_1p5km.nc` | `uo`, `vo` — eastward/northward current, m/s | 1.5 km hourly |
+| `ssh_1p5km.nc` | `zos` — sea surface height above geoid, m | 1.5 km hourly |
+| `wav_1p5km.nc` | `VHM0`, `VTM02`, `VMDR`, `VHM0_SW1`, `VSDX`, `VSDY` | 1.5 km hourly |
+| `wnd_era5.nc` | `u10`, `v10`, `msl` | ERA5, 0.25 deg hourly |
+
+`cur` and `ssh` are both tide — sideways flow and vertical level respectively, running about a
+quarter-cycle apart. They are separate blocks for that reason, not redundant ones.
+
+### Feature blocks
+
+| Block | Features added | Contents |
+|---|---:|---|
+| `CUR` | 5 | current east/north, bow-relative sin/cos, validity |
+| `SSH` | 3 | sea level, its rate of change, validity |
+| `WAV` | 7 | wave height, period, bow-relative sin/cos, swell height, Stokes drift, validity |
+| `WND` | 6 | wind speed, bow-relative sin/cos, crosswind, pressure, validity |
+
+All four take the model from **18 to 39 input channels**. Directions are always bow-relative
+sine/cosine, never degrees: a head sea and a beam sea act on a hull differently, and absolute bearing
+cannot express that. Each block carries its own validity flag because `uo`/`vo` are undefined in 39
+cells where `zos` is defined — one shared flag would mark good sea level as missing.
+
+```bash
+python run_training.py bilstm_attention --mode full --groups Cargo --env-blocks CUR WAV
+python run_training.py bilstm_attention --mode full --groups Cargo --env-blocks CUR SSH WAV WND
+```
+
+### Coverage, and why it constrains the design
+
+The 1.5 km archive begins 2024-08-04; the release begins 2023-08-22.
+
+| Split | currents | sea level | waves | wind |
+|---|---:|---:|---:|---:|
+| train | 53.4% | 55.2% | 54.8% | 56.8% |
+| test | 94.6% | 98.5% | 98.5% | 100.0% |
+| validation | 94.7% | 98.8% | 98.8% | 100.0% |
+| calibration | 95.7% | 98.6% | 98.6% | 100.0% |
+
+Every split that produces a reported number is well covered; **43% of training is not**. Uncovered
+windows are zero-filled with their validity flag off. For a clean ablation, train on the covered era
+alone — otherwise the environmental arms differ from the control in population as well as in features.
+
+### Alignment is asserted, not assumed
+
+Sidecars are row-aligned to their shard rather than key-joined, so `read_sidecar` checks the carried
+`segment_id` and `origin_time_ns` on every load. A misaligned sidecar would attach one vessel's sea
+state to another's track and train perfectly happily; the assertion is what makes that impossible
+rather than merely unlikely.
+
 ## Inputs, targets and units
 
 Each source window has `X: (20,8)`, `X_mask: (20,8)` and `y: (12,2)`.
@@ -64,10 +134,10 @@ Each source window has `X: (20,8)`, `X_mask: (20,8)` and `y: (12,2)`.
 - Inputs are 20 one-minute grid timestamps spanning 19 minutes. Selected reports can repeat; their ages are explicit.
 - Eight features: relative east/north metres; speed in metres/second; course sine/cosine; heading sine/cosine; observation age in seconds.
 - The model receives the eight standardised values plus eight Boolean-mask channels. Invalid features are zero after standardisation, and valid zeros remain distinguishable.
-- By default two standardised absolute UTM reference-position channels are repeated across the history, giving **18 model channels**. They supply known port-location context. Set `use_spatial_context=False` consistently for a 16-channel comparison.
+- By default two standardised absolute UTM reference-position channels are repeated across the history, giving **18 model channels**. They supply known port-location context. Set `use_spatial_context=False` consistently for a 16-channel comparison. Environmental blocks append to this: all four give 39 channels. A run with blocks is not comparable to one without unless both are retrained.
 - Targets are east/north displacements in metres at +5, +10, +15, …, +60 minutes. They are relative to the final **actual** observed input position, which may precede the nominal origin by up to 180 seconds.
 - Neural targets use a fixed 1,000-metre scale internally. Output means and standard deviations are converted back to metres before calibration, evaluation and plotting. There is no fitted target scaler.
-- The default Gaussian head predicts two means and two positive standard deviations per horizon, with softplus and a one-metre floor. It models diagonal conditional covariance; it does not represent multiple distinct route modes or all model uncertainty.
+- The default Gaussian head predicts two means and two positive standard deviations per horizon, with softplus and a one-metre floor. It models diagonal conditional covariance; it does not represent multiple distinct route modes or all model uncertainty. **This is a measured weakness, not only a caveat** — see `REGIME_BIMODALITY.md`, where from a single input regime the model over-predicts motion 60-fold for vessels that stay and under-predicts 23-fold for vessels that depart. A `--mixture-components K` head exists for experimenting with this; it is not recommended on current evidence, and the same document says why.
 - Deterministic mode uses Huber loss and residual-calibrated circular regions. Use the same output mode across neural models for an architecture comparison.
 
 Velocity baselines use distinct actual report times to avoid treating repeated grid selections as zero-speed measurements. Extrapolation includes report age. SOG/COG is projected from true bearing into the dataset's UTM coordinates. Missing SOG/COG falls back to last positional velocity; if that cannot be estimated, zero velocity is used. No speed cap is applied to hide errors.
@@ -176,6 +246,37 @@ comparison = compare_runs([
 
 Per-horizon ADE uses all twelve horizons; FDE is the error at 60 minutes. These new ADE values cannot be directly compared with the old five-horizon ADE averages or older differently selected datasets.
 
+### Horizon bands
+
+Every evaluation also reports two pre-registered bands: `ade_5_30_m` and `ade_35_60_m`, plus the same
+split per regime. `HORIZON_SPLIT_MIN` in `workflow.py` is 30.
+
+Error grows roughly threefold across the range — Cargo's converged full run gives **457 m at 5–30
+minutes against 1,456 m at 35–60**, with an aggregate of 957 m that describes neither. Any effect
+concentrated at short horizons is invisible in the aggregate. Both bands are reported on every run
+and neither may be dropped; the split was declared before the environmental ablation, and
+`ENVIRONMENTAL_JOIN_PLAN.md` holds the registration.
+
+### Seeds are not optional
+
+A single run per configuration is not interpretable here. Measured at pilot scale, the same
+configuration on the same data, changing nothing but the seed:
+
+| Group | spread across 4 seeds | CV |
+|---|---|---:|
+| Cargo | 1,473–1,780 m | **8.57%** |
+| Port_Service | 669–729 m | 4.42% |
+
+Against an expected environmental effect of 2.2%, that needs **238 and 63 runs per arm** to detect.
+For comparison, EnvShip reports five seeds with an ADE standard deviation of 0.2–1.6 m.
+
+Use `--seed N`, run every arm on the same seeds including the control, and report a spread rather
+than a number. "Identical seed" is not a sufficient control: holding it fixed still varies the result,
+because changing the input width changes the initialisation.
+
+Splitting by horizon makes this worse in the short band (11.09% CV on Cargo), not better — so a null
+there is uninformative, which is awkward given that is where the effect is expected to be largest.
+
 ## Prediction regions and their limits
 
 After fitting, calibration computes a separate radial residual quantile for each horizon. Gaussian models obtain axis-aligned ellipses scaled by predicted standard deviations; deterministic models and baselines obtain circles. The empirical quantile uses rank `ceil((n+1) * nominal_coverage)` and rejects insufficient calibration support.
@@ -184,7 +285,7 @@ These are **empirically adjusted per-horizon 2D regions**. The nominal 90% is a 
 
 Known dataset limitations remain: Fishing has only two contributing training MMSIs; Research_Offshore includes ambiguous inherited labels; Unknown is heterogeneous; about 98.64% of target labels are interpolated; March supplies 84.94% of test windows, while August has one. Source cleaning is offline and can use later observations. Review these issues before strong specialist, seasonal or online-deployment claims.
 
-The requested four approaches compare model families within vessel groups. Shared and type-conditioned models, multiple training seeds, matched-budget tuning, dependence-aware confidence intervals and future independent confirmation remain additional research tasks.
+The requested four approaches compare model families within vessel groups. Shared and type-conditioned models, matched-budget tuning, dependence-aware confidence intervals and future independent confirmation remain additional research tasks. **Multiple training seeds are no longer an optional extra** — they were measured as necessary, and the section on seeds above gives the figures.
 
 ## What is saved
 
@@ -213,6 +314,16 @@ Sample exports and charts are illustrative. No schematic trajectories or hard-co
 - `test_settings.py`: path, precedence, group selection and hardware-policy checks.
 - `worker.py` and `jobs/`: process-isolated notebook execution, requests and logs.
 - `SOURCE_REVIEW.md`: what was retained and changed from each original notebook.
+- `build_env_sidecar.py`: joins the environmental fields onto the release, writing row-aligned Parquet sidecars outside it.
+- `download_era5_wind.py`: fetches ERA5 wind and pressure from the Climate Data Store, month by month and resumable.
+- `jasmin/`: Slurm wrappers, the ablation submitter and their own README. See that file before submitting anything.
+
+Findings and plans, each recording what was measured and what was withdrawn:
+
+- `ENVIRONMENTAL_JOIN_PLAN.md`: the environmental design, verified dataset IDs, coverage, the ablation, and the pre-registration.
+- `REGIME_BIMODALITY.md`: why Port_Service and Research_Offshore cannot beat a constant-position baseline. Includes two explanations that measurement withdrew.
+- `DEPARTURE_PREDICTABILITY.md`: whether a stationary vessel's departure is predictable from its history. It is — AUC 0.961.
+- `TIDE_GAUGE_OPTION.md`: an observed tide gauge assessed as a source and declined, with the reason.
 - `test_workflow.py`: focused tests for data handling, age-adjusted baselines, masks and quantiles.
 - `requirements.txt`: versions installed in the verification environment.
 - `qa/`: notebook execution/HTML previews, source-review extracts, original-file hashes, test reports and verification evidence.
@@ -222,7 +333,18 @@ Copy this folder (including hidden `.env`, or recreate it from `.env.example`) a
 
 ## Verification completed
 
-All four delivered notebooks executed successfully on the same small Cargo cohorts: 128 training, 128 validation, 128 calibration and 90 test windows. Each neural model ran for one epoch with a small verification architecture. Saving, reloading, calibration and evaluation completed. **Full dataset training has not been run; these example results do not establish model accuracy.**
+All four delivered notebooks executed successfully on the same small Cargo cohorts: 128 training, 128 validation, 128 calibration and 90 test windows. Each neural model ran for one epoch with a small verification architecture. Saving, reloading, calibration and evaluation completed. Those example results do not establish model accuracy.
+
+**Superseded on 21 September 2026.** Full dataset training has since completed on JASMIN for
+`bilstm_attention` and `baselines` across all seven groups, against release
+`full_5_60_20260918T072424Z` on a GPU. Cargo converged to a test ADE of **956.8 m** (457.4 m at 5–30
+minutes, 1,456.1 m at 35–60), with empirical horizon coverage of **0.905** against a 0.90 target.
+
+Two things learned from that run. **The job is I/O bound, not GPU bound**: 382 s/epoch against 228 on
+a Mac CPU, because the release sat on a network-mounted home directory and each epoch re-reads 4,912
+compressed shards through a single-threaded generator. Put the release on a group workspace. And
+**one run still establishes nothing about the environmental question** — the seed measurement above
+is what decides whether an ablation can detect a 2.2% effect.
 
 Ten focused workflow tests passed. Six neural contract checks covered all three architectures in deterministic and probabilistic modes, including save/reload consistency. All eight final saved charts were visually inspected for legibility and clipping. Notebook HTML previews were generated, but their full page layout was not visually inspected.
 
@@ -232,4 +354,4 @@ The four original notebooks and the source release metadata match their recorded
 
 ### Hardware/path update verification
 
-The portable settings update passed 19 regression tests, an all-group full-mode metadata preflight without training, one Cargo neural CPU smoke run including checkpoint reload/calibration/evaluation, and a baseline notebook-worker run using custom job/result directories. Evidence is in `qa/portable_settings_checks.json` and the adjacent logs. GPU selection/probe behavior was tested with mocked hardware; actual GPU training remains unverified until run on the cluster. The four notebook files and their earlier saved outputs were not regenerated for this launcher update. Full training has not been started.
+The portable settings update passed 19 regression tests, an all-group full-mode metadata preflight without training, one Cargo neural CPU smoke run including checkpoint reload/calibration/evaluation, and a baseline notebook-worker run using custom job/result directories. Evidence is in `qa/portable_settings_checks.json` and the adjacent logs. GPU selection/probe behavior was tested with mocked hardware. **Actual GPU training is now verified**: a smoke run and then full training completed on JASMIN's orchid partition with TensorFlow 2.16.2, the GPU detected, visible and selected rather than silently falling back to CPU. The four notebook files and their earlier saved outputs were not regenerated for this launcher update. Full training has not been started.
